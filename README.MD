@@ -1,20 +1,62 @@
 # FastAPI movie theater
 
-This is an API for movie theater service build with Python using FastAPI. This app allows to add movies, get 
+FastAPI Movie Theater is a RESTful API for managing a movie theater platform, built with Python and FastAPI.
+The service supports movie management, user interactions (comments, ratings, reactions, favourites) 
+and an authentication system with role-based access control.
 
 ## Features
 
-- JWT model for users, moderators and admins
-- Built-in swagger documentation
-- Add movies, post comments, ratings and reactions to them and add movies to favourites
-- Custom user model with registration, account activation, changing password via entering old password 
-or providing refresh token
+- **JWT-based authentication**
+  - Access & refresh tokens
+  - Role separation: users, moderators, admins
+- **Custom user model**
+  - User registration
+  - Account activation
+  - Password change:
+    - old password
+    - refresh token
+- **Movie management**
+  - Create, update, delete movies (staff/admin)
+  - Pagination & filtering
+- **User interactions**
+  - Post comments on movies
+  - Add ratings (toggle / update)
+  - React to movies
+  - Add movies to favourites
+- **Swagger & ReDoc**
+  - Auto-generated API documentation
+- **Production-ready architecture**
+  - Async SQLAlchemy
+  - Alembic migrations
+  - Docker & Docker Compose support
 
 ## Tech stack
 
-- **Backend**: Python, FastAPI
-- **Database**: SQLite, PostgreSQL
-- **Deployment**: AWS
+### Backend
+- Python 3.12+
+- FastAPI
+- Pydantic v2
+- SQLAlchemy (async)
+- Alembic
+
+### Database
+- SQLite (local / development)
+- PostgreSQL (production)
+
+### Infrastructure & DevOps
+- Docker & Docker Compose
+- Nginx (reverse proxy)
+- AWS EC2
+- GitHub Actions (CI)
+
+## API Documentation
+
+Once the application is running, interactive documentation is available at:
+
+- **Swagger UI**:  
+  `http://localhost:8000/docs`
+- **ReDoc**:  
+  `http://localhost:8000/redoc`
 
 ### Directory Tree
 
@@ -353,334 +395,151 @@ This directory structure is thoughtfully organized to promote maintainability, s
   - `init.sql`: Initial SQL setup script.
   - `README.MD`: Project documentation.
 
-Certainly! Below is a comprehensive explanation of your `docker-compose-prod.yml` configuration and its associated files. This section is tailored for inclusion in your project's README, providing clear insights into each service, its purpose, and how it contributes to the overall deployment.
 
 ---
-
-## Docker Compose Configuration (`docker-compose-prod.yml`)
-
-The `docker-compose-prod.yml` file orchestrates multiple Docker containers to create a robust and scalable production environment for your application. Each service defined within this file serves a specific role, ensuring that all components of your application work seamlessly together.
-
-### Overview of Services
-
-Here's a breakdown of each service defined in the `docker-compose-prod.yml` file:
-
-1. [**db**](#db-service)
-2. [**pgadmin**](#pgadmin-service)
-3. [**web**](#web-service)
-4. [**migrator**](#migrator-service)
-5. [**mailhog**](#mailhog-service)
-6. [**minio**](#minio-service)
-7. [**minio_mc**](#minio_mc-service)
-8. [**nginx**](#nginx-service)
-9. [**Volumes**](#volumes)
-10. [**Networks**](#networks)
-
----
-
-### db Service
 
 ```yaml
-db:
-  image: 'postgres:latest'
-  container_name: postgres_theater
-  env_file:
-    - .env
-  ports:
-    - "5432:5432"
-  volumes:
-    - ./init.sql:/docker-entrypoint-initdb.d/init.sql
-    - postgres_theater_data:/var/lib/postgresql/data/
-  networks:
-    - theater_network
-  healthcheck:
-    test: [ "CMD-SHELL", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB -h 127.0.0.1 || exit 1" ]
-    interval: 10s
-    timeout: 5s
-    retries: 5
-    start_period: 20s
-```
+services:
+  db:
+    image: 'postgres:latest'
+    container_name: postgres_theater
+    env_file:
+      - .env
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - postgres_theater_data:/var/lib/postgresql
+    networks:
+      - theater_network
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB -h 127.0.0.1 || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
-- **Purpose:**  
-  Hosts the PostgreSQL database required by your application.
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: pgadmin_theater
+    ports:
+      - "3333:80"
+    env_file:
+      - .env
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - pgadmin_theater_data:/var/lib/pgadmin
+    networks:
+      - theater_network
 
-- **Key Configurations:**
-  - **Image:** Uses the latest PostgreSQL Docker image.
-  - **Container Name:** Named `postgres_theater` for easy identification.
-  - **Environment Variables:** Loaded from the `.env` file to configure database credentials and settings.
-  - **Ports:** Maps the container's port `5432` to the host's port `5432`, allowing external access if needed.
-  - **Volumes:**
-    - `./init.sql:/docker-entrypoint-initdb.d/init.sql`: Executes the `init.sql` script on container initialization to set up the database schema and seed data.
-    - `postgres_theater_data:/var/lib/postgresql/data/`: Persists PostgreSQL data, ensuring data retention across container restarts.
-  - **Networks:** Connected to the `theater_network` for inter-service communication.
-  - **Healthcheck:** Uses `pg_isready` to verify the database is ready to accept connections, enhancing reliability by ensuring dependent services wait until the database is operational.
+  web:
+    restart: always
+    build: .
+    container_name: backend_theater
+    command: [ "/bin/bash", "/commands/run_web_server_prod.sh" ]
+    env_file:
+      - .env
+    environment:
+      - LOG_LEVEL=debug
+      - PYTHONPATH=/usr/src/fastapi
+      - WATCHFILES_FORCE_POLLING=true
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./src:/usr/src/fastapi
+    networks:
+      - theater_network
 
----
+  migrator:
+    build: .
+    container_name: alembic_migrator_theater
+    command: ["/bin/bash", "/commands/run_migration.sh"]
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./src:/usr/src/fastapi
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/usr/src/fastapi
+    networks:
+      - theater_network
 
-### pgadmin Service
+  mailhog:
+    restart: always
+    build:
+      context: .
+      dockerfile: ./docker/mailhog/Dockerfile
+    container_name: mailhog_theater
+    command: [ "/bin/bash", "-c", "/commands/setup_mailhog_auth.sh && MailHog" ]
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+    env_file:
+      - .env
+    environment:
+      MH_AUTH_FILE: /mailhog.auth
+    networks:
+      - theater_network
 
-```yaml
-pgadmin:
-  image: dpage/pgadmin4
-  container_name: pgadmin_theater
-  ports:
-    - "3333:80"
-  env_file:
-    - .env
-  depends_on:
-    db:
-      condition: service_healthy
-  volumes:
-    - pgadmin_theater_data:/var/lib/pgadmin
-  networks:
-    - theater_network
-```
+  minio:
+    image: minio/minio:latest
+    container_name: minio-theater
+    command: server --console-address ":9001" /data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    env_file:
+      - .env
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - theater_network
 
-- **Purpose:**  
-  Provides a web-based interface for managing the PostgreSQL database, making database administration more accessible.
+  minio_mc:
+    build:
+      context: .
+      dockerfile: docker/minio_mc/Dockerfile
+    container_name: minio_mc_theater
+    command: ["/bin/sh", "-c", "/commands/setup_minio.sh"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    env_file:
+      - .env
+    networks:
+      - theater_network
 
-- **Key Configurations:**
-  - **Image:** Utilizes the official `pgadmin4` Docker image.
-  - **Container Name:** Named `pgadmin_theater`.
-  - **Ports:** Maps container port `80` to host port `3333`, allowing access to PgAdmin via `http://<EC2-Public-IP>:3333`.
-  - **Environment Variables:** Loaded from the `.env` file to configure PgAdmin credentials and settings.
-  - **Depends On:** Waits for the `db` service to become healthy before starting, ensuring the database is ready for management tasks.
-  - **Volumes:** Persists PgAdmin data to `pgadmin_theater_data`, retaining configurations and user data.
-  - **Networks:** Connected to the `theater_network` for seamless interaction with the `db` service.
+  nginx:
+    build:
+      context: .
+      dockerfile: docker/nginx/Dockerfile
+    container_name: nginx
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./configs/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - web
+    env_file:
+      - ./docker/nginx/.env
+    networks:
+      - theater_network
 
----
-
-### web Service
-
-```yaml
-web:
-  restart: always
-  build: .
-  container_name: backend_theater
-  command: [ "/bin/bash", "/commands/run_web_server_prod.sh" ]
-  env_file:
-    - .env
-  environment:
-    - LOG_LEVEL=debug
-    - PYTHONPATH=/usr/src/fastapi
-    - WATCHFILES_FORCE_POLLING=true
-  ports:
-    - "8000:8000"
-  depends_on:
-    db:
-      condition: service_healthy
-    minio:
-      condition: service_healthy
-  volumes:
-    - ./src:/usr/src/fastapi
-  networks:
-    - theater_network
-```
-
-- **Purpose:**  
-  Hosts the main backend application, typically built with FastAPI or a similar framework.
-
-- **Key Configurations:**
-  - **Restart Policy:** Always restarts the container if it stops, ensuring high availability.
-  - **Build Context:** Builds the Docker image using the Dockerfile located in the current directory (`.`).
-  - **Container Name:** Named `backend_theater`.
-  - **Command:** Executes the `run_web_server_prod.sh` script to start the web server in production mode.
-  - **Environment Variables:**
-    - Loaded from the `.env` file for configuration.
-    - Additional variables like `LOG_LEVEL`, `PYTHONPATH`, and `WATCHFILES_FORCE_POLLING` fine-tune application behavior.
-  - **Ports:** Maps container port `8000` to host port `8000`, making the application accessible via `http://<EC2-Public-IP>:8000`.
-  - **Depends On:** Ensures both `db` and `minio` services are healthy before starting, maintaining service dependencies.
-  - **Volumes:** Mounts the `./src` directory to `/usr/src/fastapi` inside the container, facilitating code changes without rebuilding the image.
-  - **Networks:** Connected to the `theater_network` for communication with other services like `db` and `minio`.
-
----
-
-### migrator Service
-
-```yaml
-migrator:
-  build: .
-  container_name: alembic_migrator_theater
-  command: ["/bin/bash", "/commands/run_migration.sh"]
-  depends_on:
-    db:
-      condition: service_healthy
-  volumes:
-    - ./src:/usr/src/fastapi
-  env_file:
-    - .env
-  environment:
-    - PYTHONPATH=/usr/src/fastapi
-  networks:
-    - theater_network
-```
-
-- **Purpose:**  
-  Handles database migrations using Alembic, ensuring the database schema is up-to-date with the application's models.
-
-- **Key Configurations:**
-  - **Build Context:** Uses the same Dockerfile as the `web` service (`.`).
-  - **Container Name:** Named `alembic_migrator_theater`.
-  - **Command:** Executes the `run_migration.sh` script to perform migrations.
-  - **Depends On:** Waits for the `db` service to be healthy before running migrations.
-  - **Volumes:** Mounts the `./src` directory to `/usr/src/fastapi`, allowing access to the application's source code and migration scripts.
-  - **Environment Variables:**
-    - Loaded from the `.env` file.
-    - Sets `PYTHONPATH` to ensure Python modules are correctly resolved.
-  - **Networks:** Connected to the `theater_network` for interaction with the `db` service.
-
----
-
-### mailhog Service
-
-```yaml
-mailhog:
-  restart: always
-  build:
-    context: .
-    dockerfile: ./docker/mailhog/Dockerfile
-  container_name: mailhog_theater
-  command: ["/bin/bash", "-c", "/commands/setup_mailhog_auth.sh && ~/go/bin/MailHog"]
-  ports:
-    - "8025:8025"
-    - "1025:1025"
-  env_file:
-    - .env
-  environment:
-    MH_AUTH_FILE: /mailhog.auth
-  networks:
-    - theater_network
-```
-
-- **Purpose:**  
-  Provides an email testing tool (`MailHog`) to capture and view emails sent by the application without sending them to actual recipients.
-
-- **Key Configurations:**
-  - **Restart Policy:** Always restarts the container if it stops.
-  - **Build Context:** Builds the Docker image using the Dockerfile located at `./docker/mailhog/Dockerfile`.
-  - **Container Name:** Named `mailhog_theater`.
-  - **Command:** Runs the `setup_mailhog_auth.sh` script to configure authentication, then starts the MailHog server.
-  - **Ports:** 
-    - `8025:8025`: Access the MailHog web interface via `http://<EC2-Public-IP>:8025`.
-    - `1025:1025`: SMTP port for capturing outgoing emails.
-  - **Environment Variables:**
-    - Loaded from the `.env` file.
-    - `MH_AUTH_FILE`: Specifies the path to the MailHog authentication file.
-  - **Networks:** Connected to the `theater_network` for communication with other services like `web`.
-
----
-
-### minio Service
-
-```yaml
-minio:
-  image: minio/minio:latest
-  container_name: minio-theater
-  command: server --console-address ":9001" /data
-  ports:
-    - "9000:9000"
-    - "9001:9001"
-  env_file:
-    - .env
-  volumes:
-    - minio_data:/data
-  healthcheck:
-    test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
-    interval: 10s
-    timeout: 5s
-    retries: 5
-  networks:
-    - theater_network
-```
-
-- **Purpose:**  
-  Hosts MinIO, an object storage server compatible with Amazon S3 APIs, used for storing and retrieving files.
-
-- **Key Configurations:**
-  - **Image:** Utilizes the latest official `minio/minio` Docker image.
-  - **Container Name:** Named `minio-theater`.
-  - **Command:** Starts the MinIO server with the console accessible on port `9001` and data stored in `/data`.
-  - **Ports:** 
-    - `9000:9000`: Access MinIO server via `http://<EC2-Public-IP>:9000`.
-    - `9001:9001`: Access MinIO console via `http://<EC2-Public-IP>:9001`.
-  - **Environment Variables:** Loaded from the `.env` file to configure MinIO credentials and settings.
-  - **Volumes:** Persists MinIO data to `minio_data`, ensuring data retention across container restarts.
-  - **Healthcheck:** Uses `curl` to verify MinIO's health status by accessing the live health endpoint.
-  - **Networks:** Connected to the `theater_network` for interaction with other services like `web` and `minio_mc`.
-
----
-
-### minio_mc Service
-
-```yaml
-minio_mc:
-  build:
-    context: .
-    dockerfile: docker/minio_mc/Dockerfile
-  container_name: minio_mc_theater
-  command: ["/bin/sh", "-c", "/commands/setup_minio.sh"]
-  depends_on:
-    minio:
-      condition: service_healthy
-  env_file:
-    - .env
-  networks:
-    - theater_network
-```
-
-- **Purpose:**  
-  Hosts the MinIO Client (`mc`), a command-line tool for managing MinIO and S3-compatible object storage servers.
-
-- **Key Configurations:**
-  - **Build Context:** Builds the Docker image using the Dockerfile located at `docker/minio_mc/Dockerfile`.
-  - **Container Name:** Named `minio_mc_theater`.
-  - **Command:** Executes the `setup_minio.sh` script to configure the MinIO client, setting up aliases and necessary configurations.
-  - **Depends On:** Waits for the `minio` service to become healthy before starting, ensuring that the MinIO server is ready for client operations.
-  - **Environment Variables:** Loaded from the `.env` file to configure MinIO client settings.
-  - **Networks:** Connected to the `theater_network` for seamless interaction with the `minio` service.
-
----
-
-### nginx Service
-
-```yaml
-nginx:
-  build:
-    context: .
-    dockerfile: docker/nginx/Dockerfile
-  container_name: nginx
-  restart: always
-  ports:
-    - "80:80"
-  volumes:
-    - ./configs/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-  depends_on:
-    - web
-  env_file:
-    - ./docker/nginx/.env
-  networks:
-    - theater_network
-```
-
-- **Purpose:**  
-  Serves as the reverse proxy and web server, handling incoming HTTP requests, managing load balancing, and providing Basic Authentication for certain endpoints.
-
-- **Key Configurations:**
-  - **Build Context:** Builds the Docker image using the Dockerfile located at `docker/nginx/Dockerfile`.
-  - **Container Name:** Named `nginx`.
-  - **Restart Policy:** Always restarts the container if it stops, ensuring high availability.
-  - **Ports:** Maps container port `80` to host port `80`, making the application accessible via `http://<EC2-Public-IP>:80`.
-  - **Volumes:** 
-    - `./configs/nginx/nginx.conf:/etc/nginx/nginx.conf:ro`: Mounts the custom Nginx configuration file into the container as read-only.
-  - **Depends On:** Waits for the `web` service to be up and running before starting, ensuring that the backend is available to handle proxied requests.
-  - **Environment Variables:** Loaded from `./docker/nginx/.env` to configure Nginx-specific settings, including credentials for Basic Authentication.
-  - **Networks:** Connected to the `theater_network` for communication with the `web` service.
-
----
-
-### Volumes
-
-```yaml
 volumes:
   postgres_theater_data:
     driver: local
@@ -688,43 +547,85 @@ volumes:
     driver: local
   minio_data:
     driver: local
-```
 
-- **Purpose:**  
-  Defines Docker volumes to persist data across container restarts and maintain data integrity.
-
-- **Defined Volumes:**
-  - **postgres_theater_data:**  
-    - **Used By:** `db` service.
-    - **Purpose:** Persists PostgreSQL database data, ensuring that database information is retained even if the container is recreated.
-  
-  - **pgadmin_theater_data:**  
-    - **Used By:** `pgadmin` service.
-    - **Purpose:** Stores PgAdmin configurations and user data, maintaining consistency across sessions.
-  
-  - **minio_data:**  
-    - **Used By:** `minio` service.
-    - **Purpose:** Persists MinIO object storage data, ensuring that stored files remain intact despite container lifecycle events.
-
----
-
-### Networks
-
-```yaml
 networks:
   theater_network:
     driver: bridge
 ```
 
-- **Purpose:**  
-  Defines a custom Docker network to facilitate secure and efficient communication between services.
+## Docker Compose Description
 
-- **Key Configurations:**
-  - **theater_network:**
-    - **Driver:** `bridge` – The default Docker network driver, suitable for standalone containers on a single host.
-    - **Purpose:** Isolates the services within the `theater_network`, allowing them to communicate with each other while keeping them separate from other Docker networks and the host network.
+This `docker-compose.yml` defines a **production-ready FastAPI movie theater stack** with database, migrations, object storage, email testing, and reverse proxy, all connected through a single isolated Docker network.
 
----
+### Services Overview
+
+* **db (PostgreSQL)**
+  Primary relational database for the application.
+
+  * Initialized using `init.sql`
+  * Persistent storage via Docker volume
+  * Healthcheck ensures dependent services start only when DB is ready
+
+* **pgadmin**
+  Web-based PostgreSQL administration tool.
+
+  * Accessible on `http://localhost:3333`
+  * Starts only after the database becomes healthy
+
+* **web (FastAPI backend)**
+  Main application container.
+
+  * Built from the project Dockerfile
+  * Runs the production startup script
+  * Mounts source code for flexibility
+  * Depends on PostgreSQL and MinIO healthchecks
+
+* **migrator (Alembic)**
+  Dedicated container for database migrations.
+
+  * Runs Alembic migrations automatically
+  * Ensures schema is up to date before app usage
+  * Depends on healthy PostgreSQL service
+
+* **mailhog**
+  Local SMTP testing service for email flows.
+
+  * Web UI on `http://localhost:8025`
+  * SMTP server on port `1025`
+  * Includes basic authentication setup
+
+* **minio**
+  S3-compatible object storage (used for media/files).
+
+  * API on port `9000`
+  * Admin console on port `9001`
+  * Persistent data stored in a Docker volume
+  * Healthcheck ensures readiness before setup
+
+* **minio_mc**
+  MinIO client container.
+
+  * Automatically configures buckets and policies
+  * Runs only after MinIO is healthy
+
+* **nginx**
+  Reverse proxy for the FastAPI backend.
+
+  * Exposes application on port `80`
+  * Uses a custom Nginx configuration
+  * Routes traffic to the `web` service
+
+### Volumes
+
+* `postgres_theater_data` – PostgreSQL persistent storage
+* `pgadmin_theater_data` – pgAdmin configuration and state
+* `minio_data` – MinIO object storage data
+
+### Network
+
+* **theater_network**
+  Custom bridge network that allows all services to communicate internally while keeping them isolated from other Docker stacks.
+
 
 ## Nginx Dockerfile (`docker/nginx/Dockerfile`)
 
@@ -1502,314 +1403,240 @@ The CI pipeline performs the following tasks:
 4. **Run flake8**: Checks the code for style and syntax errors.
 5. **Run Tests**: Executes integration tests for different components of the application.
 
-#### CI Pipeline Configuration
 
-Below is the YAML configuration for the CI pipeline. This file should be placed in the `.github/workflows/` directory of your repository.
-
-```yaml
-name: CI Pipeline
+```yaml 
+name: CI
 
 on:
+  push:
+    branches: ["**"]
   pull_request:
-    branches:
-      - "main"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  test-accounts:
+  lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.13"
 
-      - name: Install dependencies
+      - name: Install flake8
         run: |
           python -m pip install --upgrade pip
-          pip install poetry
-          poetry install
+          pip install flake8
 
       - name: Run flake8
         run: |
-          poetry run flake8 src
+          flake8 .
 
-      - name: Run accounts tests
-        run: |
-          poetry run pytest src/tests/test_integration/test_accounts.py
-
-  test-movies:
+  tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: lint
+
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.10"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Install dependencies
+      - name: Run tests via docker compose
         run: |
-          python -m pip install --upgrade pip
-          pip install poetry
-          poetry install
-
-      - name: Run flake8
-        run: |
-          poetry run flake8 src
-
-      - name: Run movies tests
-        run: |
-          poetry run pytest src/tests/test_integration/test_movies.py
-
-  test-profiles:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.10"
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install poetry
-          poetry install
-
-      - name: Run flake8
-        run: |
-          poetry run flake8 src
-
-      - name: Run profiles tests
-        run: |
-          poetry run pytest src/tests/test_integration/test_profiles.py
-
-  test-e2e:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Start Docker Compose and wait for completion
-        run: |
+          docker compose -f docker-compose-tests.yml down -v --remove-orphans || true
           docker compose -f docker-compose-tests.yml up --build --abort-on-container-exit --exit-code-from web
 
       - name: Cleanup
         if: always()
         run: |
-          docker compose -f docker-compose-tests.yml down
+          docker compose -f docker-compose-tests.yml down -v --remove-orphans || true
+          docker system prune -af || true
+
 ```
+## CI: Lint + Tests (GitHub Actions)
 
-#### Understanding the CI Pipeline YAML Configuration
+This GitHub Actions workflow runs **automatic code quality checks and end-to-end/integration tests** for the project on every push and pull request. It helps catch style issues early and ensures the application works correctly inside Docker (same way you run it locally).
 
-Let's break down the YAML configuration to understand each part and its purpose.
+---
 
-##### 1. `name: CI Pipeline`
+### Trigger conditions
 
-- **Purpose**: Assigns a name to the workflow, making it easily identifiable in the GitHub Actions interface.
+The workflow runs when:
 
-##### 2. `on:`
-
-- **Purpose**: Specifies the events that trigger the workflow.
-
-  ```yaml
-  on:
-    pull_request:
-      branches:
-        - "main"
-  ```
-
-  - **`pull_request`**: Triggers the workflow when a pull request is created or updated.
-  - **`branches`**: Specifies that the workflow should only run for pull requests targeting the `main` branch.
-
-##### 3. `jobs:`
-
-- **Purpose**: Defines a set of tasks (jobs) that the workflow will execute.
-
-  ```yaml
-  jobs:
-    test-accounts:
-      ...
-    test-movies:
-      ...
-    test-profiles:
-      ...
-    test-e2e:
-      ...
-  ```
-
-  Each job represents a distinct set of steps to perform specific tests or tasks.
-
-##### 4. Individual Jobs (`test-accounts`, `test-movies`, `test-profiles`, `test-e2e`)
-
-Each job follows a similar structure. Let's examine one in detail.
-
-###### Example: `test-accounts`
+* Any **push** happens to **any branch**
+* Any **pull request** is opened/updated
 
 ```yaml
-test-accounts:
-  runs-on: ubuntu-latest
-  steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
-
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: "3.10"
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install poetry
-        poetry install
-
-    - name: Run flake8
-      run: |
-        poetry run flake8 src
-
-    - name: Run accounts tests
-      run: |
-        poetry run pytest src/tests/test_integration/test_accounts.py
+on:
+  push:
+    branches: ["**"]
+  pull_request:
 ```
 
-##### **a. `runs-on: ubuntu-latest`**
+---
 
-- **Purpose**: Specifies the type of virtual machine to run the job on. Here, it uses the latest version of Ubuntu.
+### Concurrency control
 
-##### **b. `steps:`**
-
-- **Purpose**: Lists the sequence of tasks that the job will execute.
-
-###### **Step-by-Step Breakdown**
-
-1. **Checkout Code**
-
-    ```yaml
-    - name: Checkout code
-      uses: actions/checkout@v3
-    ```
-
-    - **`name`**: A descriptive name for the step.
-    - **`uses`**: Specifies an action to use. Here, it uses the `checkout` action to clone your repository into the runner.
-
-2. **Set Up Python**
-
-    ```yaml
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: "3.10"
-    ```
-
-    - **`uses`**: Utilizes the `setup-python` action to install a specific Python version.
-    - **`with`**: Provides inputs to the action. Here, it sets up Python version 3.10.
-
-3. **Install Dependencies**
-
-    ```yaml
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install poetry
-        poetry install
-    ```
-
-    - **`run`**: Executes shell commands.
-    - **Commands**:
-      - **`python -m pip install --upgrade pip`**: Upgrades `pip` to the latest version.
-      - **`pip install poetry`**: Installs Poetry, a dependency management tool.
-      - **`poetry install`**: Installs project dependencies as defined in `pyproject.toml`.
-
-4. **Run flake8**
-
-    ```yaml
-    - name: Run flake8
-      run: |
-        poetry run flake8 src
-    ```
-
-    - **Purpose**: Runs `flake8` to analyze code for style and syntax errors.
-    - **`poetry run flake8 src`**: Executes `flake8` within the Poetry-managed virtual environment, targeting the `src` directory.
-
-5. **Run Accounts Tests**
-
-    ```yaml
-    - name: Run accounts tests
-      run: |
-        poetry run pytest src/tests/test_integration/test_accounts.py
-    ```
-
-    - **Purpose**: Executes integration tests for the `accounts` component.
-    - **`poetry run pytest src/tests/test_integration/test_accounts.py`**: Runs the specified test file using `pytest` within the Poetry environment.
-
-##### 5. Repeating Jobs for Different Components
-
-The jobs `test-movies` and `test-profiles` follow the same structure as `test-accounts`, but they target different components of the application:
-
-- **`test-movies`**: Runs integration tests for the `movies` component.
-- **`test-profiles`**: Runs integration tests for the `profiles` component.
-
-This modular approach ensures that each component is tested independently, allowing for easier identification of issues.
-
-##### 6. End-to-End Testing (`test-e2e`)
+To avoid wasting CI minutes when multiple commits are pushed quickly, the workflow cancels older runs for the same branch/workflow:
 
 ```yaml
-test-e2e:
-  runs-on: ubuntu-latest
-  steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
-
-    - name: Start Docker Compose and wait for completion
-      run: |
-        docker compose -f docker-compose-tests.yml up --build --abort-on-container-exit --exit-code-from web
-
-    - name: Cleanup
-      if: always()
-      run: |
-        docker compose -f docker-compose-tests.yml down
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 ```
 
-- **Purpose**: Performs end-to-end (E2E) testing to ensure that all components of the application work together as expected.
+* Groups runs by workflow name + branch reference
+* Cancels in-progress runs if a newer one starts
 
-###### **Step-by-Step Breakdown**
+---
 
-1. **Checkout Code**
+## Jobs overview
 
-    - Similar to previous jobs, clones the repository.
+This workflow has two jobs:
 
-2. **Start Docker Compose and Wait for Completion**
+1. **lint** — runs `flake8` (fast code style / lint checks)
+2. **tests** — runs test suite using Docker Compose (only after lint passes)
 
-    ```yaml
-    - name: Start Docker Compose and wait for completion
-      run: |
-        docker compose -f docker-compose-tests.yml up --build --abort-on-container-exit --exit-code-from web
-    ```
+---
 
-    - **Purpose**: Builds and starts the Docker containers defined in `docker-compose-tests.yml` for testing purposes.
-    - **Commands**:
-      - **`docker compose -f docker-compose-tests.yml up --build`**: Builds and starts the containers.
-      - **`--abort-on-container-exit`**: Stops all containers if any container exits.
-      - **`--exit-code-from web`**: Sets the exit code of the `web` service as the exit code for the entire command, allowing the workflow to fail if the `web` service fails.
+## Job 1: `lint` (flake8)
 
-3. **Cleanup**
+Runs on `ubuntu-latest` with a 10 minute timeout:
 
-    ```yaml
-    - name: Cleanup
-      if: always()
-      run: |
-        docker compose -f docker-compose-tests.yml down
-    ```
+```yaml
+runs-on: ubuntu-latest
+timeout-minutes: 10
+```
 
-    - **Purpose**: Shuts down and removes the Docker containers, networks, and volumes created for testing.
-    - **`if: always()`**: Ensures that the cleanup step runs regardless of whether the previous steps succeeded or failed. This is crucial for maintaining a clean environment.
+### Steps breakdown
+
+#### 1) Checkout repository
+
+Downloads the repo to the runner:
+
+```yaml
+- uses: actions/checkout@v4
+```
+
+#### 2) Set up Python 3.13
+
+Uses Python 3.13 for linting to match your project version:
+
+```yaml
+- uses: actions/setup-python@v5
+  with:
+    python-version: "3.13"
+```
+
+#### 3) Install flake8
+
+Upgrades pip and installs `flake8`:
+
+```yaml
+python -m pip install --upgrade pip
+pip install flake8
+```
+
+#### 4) Run flake8
+
+Checks the whole project:
+
+```yaml
+flake8 .
+```
+
+If flake8 fails, CI stops and the `tests` job will not run.
+
+---
+
+## Job 2: `tests` (Docker Compose)
+
+Runs only if `lint` succeeds:
+
+```yaml
+needs: lint
+```
+
+Runs on `ubuntu-latest` with a 30 minute timeout:
+
+```yaml
+timeout-minutes: 30
+```
+
+### Steps breakdown
+
+#### 1) Checkout repository
+
+Downloads the repo again for the test job:
+
+```yaml
+- uses: actions/checkout@v4
+```
+
+#### 2) Set up Docker Buildx
+
+Enables Docker Buildx for building images efficiently:
+
+```yaml
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+```
+
+#### 3) Run tests using docker-compose
+
+This job executes your test environment defined in `docker-compose-tests.yml`.
+
+```yaml
+docker compose -f docker-compose-tests.yml down -v --remove-orphans || true
+docker compose -f docker-compose-tests.yml up --build --abort-on-container-exit --exit-code-from web
+```
+
+What this does:
+
+* **Cleans up** any leftover containers/volumes first (safe because of `|| true`)
+* Builds images (`--build`)
+* Starts all services needed for tests (DB, Mailhog, MinIO, web, etc.)
+* Stops everything when the test container finishes (`--abort-on-container-exit`)
+* Uses the `web` container exit code as the final CI result (`--exit-code-from web`)
+
+So CI passes/fails exactly based on the test run inside the `web` container.
+
+---
+
+### Cleanup step (always runs)
+
+Even if tests fail, the workflow ensures containers/volumes are removed and Docker cache is cleaned:
+
+```yaml
+      - name: Cleanup
+        if: always()
+        run: |
+          docker compose -f docker-compose-tests.yml down -v --remove-orphans || true
+          docker system prune -af || true
+```
+
+This keeps GitHub runners from running out of disk space and prevents cross-run interference.
+
+---
+
+### Summary
+
+This CI workflow enforces two quality gates:
+
+* **Code style must pass (`flake8`)**
+* **Tests must pass in Docker Compose environment**
+
+That gives you confidence that every PR and every push stays clean and deployable.
 
 #### Adding the CI Pipeline to Your Repository
 
@@ -1823,10 +1650,10 @@ test-e2e:
 
 2. **Add the CI Workflow File**:
 
-   Create a file named `ci-pipeline.yml` inside `.github/workflows/` and paste the CI pipeline YAML configuration provided above.
+   Create a file named `ci.yml` inside `.github/workflows/` and paste the CI pipeline YAML configuration provided above.
 
    ```bash
-   touch .github/workflows/ci-pipeline.yml
+   touch .github/workflows/ci.yml
    ```
 
 3. **Commit and Push**:
@@ -1860,178 +1687,173 @@ The CD pipeline performs the following tasks:
 
 #### CD Pipeline Configuration
 
-Below is the YAML configuration for the CD pipeline. This file should be placed in the `.github/workflows/` directory of your repository.
+
+This GitHub Actions workflow automates deployment of the FastAPI Movie Theater application to an AWS EC2 instance whenever changes are merged into the `main` branch.
+
+### Trigger conditions
 
 ```yaml
 name: Deploy to AWS EC2
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   pull_request:
     types: [closed]
-    branches:
-      - main
+    branches: [main]
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   deploy:
-    if: github.event.pull_request.merged == true || github.event_name == 'push'
+    if: github.event_name == 'push' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Set up SSH Agent
-        uses: webfactory/ssh-agent@v0.5.4
+      - name: Add EC2 SSH key
+        uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.EC2_SSH_KEY }}
 
-      - name: Add EC2 Host to known_hosts
+      - name: Add EC2 host to known_hosts
         run: |
-          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Execute Deployment Script on EC2
+      - name: Deploy (run deploy script on EC2)
         run: |
-          ssh ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
-                'bash /home/ubuntu/path/to/your/project/commands/deploy.sh'
+          ssh "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" "bash /home/ubuntu/src/FastAPI_movie_theater/commands/deploy.sh"
 ```
 
-#### Understanding the CD Pipeline YAML Configuration
+The workflow runs when:
 
-Let's break down the YAML configuration to understand each part and its purpose.
-
-##### 1. `name: Deploy to AWS EC2`
-
-- **Purpose**: Assigns a name to the workflow, making it easily identifiable in the GitHub Actions interface.
-
-##### 2. `on:`
-
-- **Purpose**: Specifies the events that trigger the workflow.
-
-  ```yaml
-  on:
-    push:
-      branches:
-        - main
-    pull_request:
-      types: [closed]
-      branches:
-        - main
-  ```
-
-  - **`push`**: Triggers the workflow when changes are pushed to the `main` branch.
-  - **`pull_request`**: Triggers the workflow when a pull request targeting the `main` branch is closed (typically when merged).
-
-##### 3. `jobs:`
-
-- **Purpose**: Defines a set of tasks (jobs) that the workflow will execute.
-
-  ```yaml
-  jobs:
-    deploy:
-      ...
-  ```
-
-  In this case, there is a single job named `deploy`.
-
-##### 4. `deploy` Job
+* A **push** is made directly to the `main` branch
+* A **pull request is merged** into the `main` branch
 
 ```yaml
-deploy:
-  if: github.event.pull_request.merged == true || github.event_name == 'push'
-  runs-on: ubuntu-latest
-
-  steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v3
-
-    - name: Set up SSH Agent
-      uses: webfactory/ssh-agent@v0.5.4
-      with:
-        ssh-private-key: ${{ secrets.EC2_SSH_KEY }}
-
-    - name: Add EC2 Host to known_hosts
-      run: |
-        ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
-
-    - name: Execute Deployment Script on EC2
-      run: |
-        ssh ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
-              'bash /home/ubuntu/path/to/your/project/commands/deploy.sh'
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [closed]
+    branches: [main]
 ```
 
-##### **a. `if:`**
+An additional condition ensures deployment only happens if:
 
-- **Purpose**: Sets a condition for when the job should run.
-  
-  ```yaml
-  if: github.event.pull_request.merged == true || github.event_name == 'push'
-  ```
+* The event is a push, **or**
+* The pull request was successfully merged
 
-  - **`github.event.pull_request.merged == true`**: Ensures the job runs only if a pull request was merged.
-  - **`github.event_name == 'push'`**: Ensures the job runs on direct pushes to the `main` branch.
+```yaml
+if: github.event_name == 'push' || github.event.pull_request.merged == true
+```
 
-##### **b. `runs-on: ubuntu-latest`**
+---
 
-- **Purpose**: Specifies the type of virtual machine to run the job on. Here, it uses the latest version of Ubuntu.
+### Concurrency control
 
-##### **c. `steps:`**
+To prevent multiple deployments from running at the same time, the workflow uses concurrency locking:
 
-- **Purpose**: Lists the sequence of tasks that the job will execute.
+```yaml
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+```
 
-###### **Step-by-Step Breakdown**
+* Only **one deployment per branch** can run at a time
+* Any in-progress deployment is **canceled** if a new one starts
 
-1. **Checkout Repository**
+---
 
-    ```yaml
-    - name: Checkout Repository
-      uses: actions/checkout@v3
-    ```
+### Deployment job overview
 
-    - **`name`**: A descriptive name for the step.
-    - **`uses`**: Specifies an action to use. Here, it uses the `checkout` action to clone your repository into the runner.
+The workflow runs a single job named `deploy` on the latest Ubuntu runner:
 
-2. **Set Up SSH Agent**
+```yaml
+runs-on: ubuntu-latest
+timeout-minutes: 30
+```
 
-    ```yaml
-    - name: Set up SSH Agent
-      uses: webfactory/ssh-agent@v0.5.4
-      with:
-        ssh-private-key: ${{ secrets.EC2_SSH_KEY }}
-    ```
+---
 
-    - **Purpose**: Configures SSH for secure access to the EC2 instance.
-    - **`uses`**: Utilizes the `ssh-agent` action to handle SSH authentication.
-    - **`with`**: Provides inputs to the action.
-      - **`ssh-private-key`**: References the SSH private key stored in GitHub Secrets (`EC2_SSH_KEY`).
+### Steps breakdown
 
-3. **Add EC2 Host to `known_hosts`**
+#### 1. Checkout repository
 
-    ```yaml
-    - name: Add EC2 Host to known_hosts
-      run: |
-        ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
-    ```
+Fetches the latest version of the repository so the workflow has access to the code and configuration files.
 
-    - **Purpose**: Adds the EC2 host to the list of known SSH hosts to prevent authenticity prompts during SSH connections.
-    - **Commands**:
-      - **`ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts`**: Scans the EC2 host's SSH keys and appends them to the `known_hosts` file.
+```yaml
+- name: Checkout
+  uses: actions/checkout@v4
+```
 
-4. **Execute Deployment Script on EC2**
+---
 
-    ```yaml
-    - name: Execute Deployment Script on EC2
-      run: |
-        ssh ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
-              'bash /home/ubuntu/path/to/your/project/commands/deploy.sh'
-    ```
+#### 2. Add EC2 SSH key
 
-    - **Purpose**: Connects to the EC2 instance via SSH and executes the `deploy.sh` script to update the application.
-    - **Commands**:
-      - **`ssh ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}`**: Initiates an SSH connection using the username and host specified in GitHub Secrets.
-      - **`'bash /home/ubuntu/path/to/your/project/commands/deploy.sh'`**: Runs the deployment script located on the EC2 instance.
+Loads the EC2 private SSH key from GitHub Secrets using an SSH agent, enabling secure remote access.
+
+```yaml
+- name: Add EC2 SSH key
+  uses: webfactory/ssh-agent@v0.9.0
+  with:
+    ssh-private-key: ${{ secrets.EC2_SSH_KEY }}
+```
+
+Required secret:
+
+* `EC2_SSH_KEY` – private SSH key for the EC2 instance
+
+---
+
+#### 3. Add EC2 host to known_hosts
+
+Adds the EC2 server to `known_hosts` to avoid SSH authenticity prompts during deployment.
+
+```yaml
+- name: Add EC2 host to known_hosts
+  run: |
+    mkdir -p ~/.ssh
+    ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+```
+
+Required secret:
+
+* `EC2_HOST` – public IP or domain of the EC2 instance
+
+---
+
+#### 4. Run deploy script on EC2
+
+Connects to the EC2 instance via SSH and executes the deployment script located on the server.
+
+```yaml
+- name: Deploy (run deploy script on EC2)
+  run: |
+    ssh "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
+    "bash /home/ubuntu/src/FastAPI_movie_theater/commands/deploy.sh"
+```
+
+Required secrets:
+
+* `EC2_USER` – SSH username (e.g. `ubuntu`)
+* `EC2_HOST` – EC2 public IP or hostname
+
+The `deploy.sh` script typically:
+
+* Pulls the latest code from GitHub
+* Resets the local repository to `origin/main`
+* Builds Docker images
+* Starts or restarts services using `docker compose`
+* Runs Alembic migrations (if configured)
+
+---
 
 #### Setting Up the CD Pipeline
 
